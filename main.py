@@ -12,6 +12,7 @@ from discord.ext import commands
 from discord.ext.commands import bot
 from dotenv import load_dotenv
 from datetime import datetime
+import cogs.tasks.song_presence as songp
 import os
 import sys
 import asyncio
@@ -24,6 +25,7 @@ from db import db
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+COMMAND_PREFIX = os.getenv('DISCORD_COMMAND_PREFIX')
 TEST_ID = os.getenv('TEST_ID')
 MADEON_ID = os.getenv('MADEON_ID')
 PORTER_ID = os.getenv('PORTER_ID')
@@ -34,13 +36,11 @@ OWNER_ID = os.getenv('OWNER_ID')
 BOT_ID = os.getenv("BOT_ID")
 QUEUE_PAGE_LEN = os.getenv("QUEUE_PAGE_LEN")
 
-
-
 auth_manager = SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET)
 sp = spotipy.Spotify(auth_manager=auth_manager)
 
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!!", intents=intents, max_messages=10000, help_command=None)
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, max_messages=10000, help_command=None)
 
 @app_commands.command(name="resync", description="resync slash commands")
 async def resync(interaction: discord.Interaction):
@@ -85,6 +85,8 @@ async def on_ready():
     
     if not bot.user.name == "Rin | " + VERSION and not bot.user.id == 849410467507601459:
         await bot.user.edit(username="Rin | " + VERSION)
+
+    songp.SongPresenceCog(bot=bot).presence_task.start()
 
 if __name__ == "__main__":
     try:

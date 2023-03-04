@@ -9,6 +9,7 @@ from discord.ext import commands
 from datetime import datetime
 from datetime import timedelta
 import asyncio
+from typing import Optional
 import templates.embeds as embeds
 
 from main import db
@@ -16,6 +17,7 @@ from main import db
 class ModerationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.interaction_webhook = None
 
     #timeout
     @app_commands.command(name="rin_timeout", description="Times out a member (for up to 28 days) and DMs them (or not)")
@@ -23,8 +25,9 @@ class ModerationCog(commands.Cog):
     @app_commands.checks.has_permissions(moderate_members=True) 
     async def timeout(self, interaction: discord.Interaction, member: discord.Member, timeout_length_days: int = 0, timeout_length_hours: int = 0, timeout_length_minutes: int = 0, reason: str = None, dm: bool = False):
         try:
+            await interaction.response.defer()
             if timeout_length_minutes + timeout_length_hours + timeout_length_days == 0:
-                await interaction.response.send_message(embed=discord.Embed(title="You cannot timeout someone for 0 minutes", color=0xff0000), ephemeral=True)
+                await interaction.followup.send(embed=discord.Embed(title="You cannot timeout someone for 0 minutes", color=0xff0000), ephemeral=True)
             else:
                 timeout = timedelta(days=timeout_length_days, minutes=timeout_length_minutes, hours=timeout_length_hours)
                 dm_block = False
@@ -43,18 +46,18 @@ class ModerationCog(commands.Cog):
                         await member.send(embed=discord.Embed(title=title, description=description, color=0xff0000))
                         user_dmd = "\nPlease note that the user has been DM'd so you will have to manually timeout!"
                     except discord.errors.Forbidden:
-                        view = DMErrorTimeoutButton(user_timeout_length=timeout, member=member, reason=reason)
+                        view = DMErrorTimeoutButton(user_timeout_length=timeout, member=member, reason=reason, mod_self=self)
                         extra = ""
                         if not reason == None:
                             extra = "\n\nIf you want to DM manually, here's the reason that was given: ```" + reason + "```"
-                        await interaction.response.send_message(embed=discord.Embed(title="This member cannot be DM'd", description="This member either has DMs disabled for unknown people, or has the bot blocked (less likely). Do you want to timeout anyways without DMing?" + extra, color=0xff0000), ephemeral=True, view=view)
+                        self.interaction_webhook = await interaction.followup.send(embed=discord.Embed(title="This member cannot be DM'd", description="This member either has DMs disabled for unknown people, or has the bot blocked (less likely). Do you want to timeout anyways without DMing?" + extra, color=0xff0000), ephemeral=True, view=view, wait=True)
                         dm_block = True
 
                 if dm_block == False:
                     await member.timeout(timeout, reason=reason)
-                    await interaction.response.send_message(embed=discord.Embed(description="<@" + str(member.id) + "> successfully timed out!", color=0x00aeff), ephemeral=True)
+                    await interaction.followup.send(embed=discord.Embed(description="<@" + str(member.id) + "> successfully timed out!", color=0x00aeff), ephemeral=True)
         except:
-            await interaction.response.send_message(embed=discord.Embed(title="There was an error timing out the person. Please try again or contact the bot owner if you see this again", description="Maybe the Rin role is under a role that the user you want to time out has? Please note that it is not possible to timeout someone for more than 28 days due to an API limitation." + user_dmd, color=0xff0000), ephemeral=True)
+            await embeds.error_executing_command(interaction, title_detail="timing out the person.", extra_error_detail=f"(Maybe the Rin role is under a role that the user you want to time out has? Please note that it is not possible to timeout someone for more than 28 days due to an API limitation.){user_dmd}")
             raise
     
     #kick
@@ -63,6 +66,7 @@ class ModerationCog(commands.Cog):
     @app_commands.checks.has_permissions(kick_members=True)
     async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = None, dm: bool = False):
         try:
+            await interaction.response.defer()
             dm_block = False
             user_dmd = ""
 
@@ -80,18 +84,17 @@ class ModerationCog(commands.Cog):
                     user_dmd = "\nPlease note that the user has been DM'd so you will have to manually kick!"
                     await asyncio.sleep(0.5) #small sleep period to make sure the dm is sent before kicking
                 except discord.errors.Forbidden:
-                    view = DMErrorKickButton(member=member, reason=reason)
-                    extra = ""
+                    view = DMErrorKickButton(member=member, reason=reason, mod_self=self)
                     if not reason == None:
                         extra = "\n\nIf you want to DM manually, here's the reason that was given: ```" + reason + "```"
-                    await interaction.response.send_message(embed=discord.Embed(title="This member cannot be DM'd", description="This member either has DMs disabled for unknown people, or has the bot blocked (less likely). Do you want to kick anyways without DMing?" + extra, color=0xff0000), ephemeral=True, view=view)
+                    self.interaction_webhook = await interaction.followup.send(embed=discord.Embed(title="This member cannot be DM'd", description="This member either has DMs disabled for unknown people, or has the bot blocked (less likely). Do you want to kick anyways without DMing?" + extra, color=0xff0000), ephemeral=True, view=view)
                     dm_block = True
 
             if dm_block == False:
                 await member.kick(reason=reason)
-                await interaction.response.send_message(embed=discord.Embed(description="<@" + str(member.id) + "> successfully kicked!", color=0x00aeff), ephemeral=True)
+                await interaction.followup.send(embed=discord.Embed(description="<@" + str(member.id) + "> successfully kicked!", color=0x00aeff), ephemeral=True)
         except:
-            await interaction.response.send_message(embed=discord.Embed(title="There was an error kicking the person. Please try again or contact the bot owner if you see this again", description="Maybe the Rin role is under a role that the user you want to kick has?" + user_dmd, color=0xff0000), ephemeral=True)
+            await embeds.error_executing_command(interaction, title_detail="kicking the person.", extra_error_detail=f"(Maybe the Rin role is under a role that the user you want to kick has?){user_dmd}")
             raise
 
     #ban
@@ -100,11 +103,12 @@ class ModerationCog(commands.Cog):
     @app_commands.checks.has_permissions(ban_members=True) 
     async def ban(self, interaction: discord.Interaction, member: discord.Member, delete_message_days: int = 0, reason: str = None, dm: bool = False):
         try:
+            await interaction.response.defer()
             dm_block = False
             user_dmd = ""
 
             if delete_message_days > 7 or delete_message_days < 0:
-                await interaction.response.send_message(embed=discord.Embed(title="You cannot delete messages for less than 0 days or more than 7 days", color=0xff0000), ephemeral=True)
+                await interaction.followup.send(embed=discord.Embed(title="You cannot delete messages for less than 0 days or more than 7 days", color=0xff0000), ephemeral=True)
             else:
                 if dm == True:
                     try:
@@ -120,72 +124,93 @@ class ModerationCog(commands.Cog):
                         user_dmd = "\nPlease note that the user has been DM'd so you will have to manually ban!"
                         await asyncio.sleep(0.5) #small sleep period to make sure the dm is sent before banning
                     except discord.errors.Forbidden:
-                        view = DMErrorBanButton(member=member, reason=reason, delete_message_days=delete_message_days)
+                        view = DMErrorBanButton(member=member, reason=reason, delete_message_days=delete_message_days, mod_self=self)
                         extra = ""
                         if not reason == None:
                             extra = "\n\nIf you want to dm manually, here's the reason that was given: ```" + reason + "```"
-                        await interaction.response.send_message(embed=discord.Embed(title="This member cannot be DM'd", description="This member either has DMs disabled for unknown people, or has the bot blocked (less likely). Do you want to ban anyways without DMing?" + extra, color=0xff0000), ephemeral=True, view=view)
+                        self.interaction_webhook = await interaction.followup.send(embed=discord.Embed(title="This member cannot be DM'd", description="This member either has DMs disabled for unknown people, or has the bot blocked (less likely). Do you want to ban anyways without DMing?" + extra, color=0xff0000), ephemeral=True, view=view)
                         dm_block = True
 
                 if dm_block == False:
                     await member.ban(delete_message_days=delete_message_days, reason=reason)
-                    await interaction.response.send_message(embed=discord.Embed(description="<@" + str(member.id) + "> successfully banned!", color=0x00aeff), ephemeral=True)
+                    await interaction.followup.send(embed=discord.Embed(description="<@" + str(member.id) + "> successfully banned!", color=0x00aeff), ephemeral=True)
         except:
-            await interaction.response.send_message(embed=discord.Embed(title="There was an error banning the person. Please try again or contact the bot owner if you see this again", description="Maybe the Rin role is under a role that the user you want to ban has?" + user_dmd, color=0xff0000), ephemeral=True)
+            await embeds.error_executing_command(interaction, title_detail="banning the person.", extra_error_detail=f"(Maybe the Rin role is under a role that the user you want to ban has?){user_dmd}")
             raise
     
+    #rename channel
+    @app_commands.command(name="rename_channel", description="Renames the selected channel, or the channel you're in if none is selected")
+    @app_commands.describe(text_channel="The channel you want to rename", channel_name="The new channel name")
+    @app_commands.checks.has_permissions(manage_channels=True) 
+    async def rename_channel(self, interaction: discord.Interaction, text_channel: Optional[discord.TextChannel], channel_name: str):
+        try:
+            await interaction.response.defer()
+            #defer (incl. on missing perm embed) to avoid api errors if rate limited
+            if text_channel == None:
+                text_channel = interaction.channel
+            text_channel_old_name = f"#{text_channel.name}"
+            await text_channel.edit(name=channel_name)
+            await interaction.followup.send(embed=discord.Embed(description=f"Channel {text_channel_old_name} successfully renamed to <#{text_channel.id}>", color=0x00aeff), ephemeral=True)
+        except:
+            await embeds.error_executing_command(interaction, title_detail="renaming the channel.")
+            raise
+
     @timeout.error
     @kick.error
     @ban.error
+    @rename_channel.error
     async def error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.MissingPermissions):
             await embeds.missing_permissions(interaction)
 
 class DMErrorTimeoutButton(discord.ui.View):
-    def __init__(self, *, timeout=300, user_timeout_length: timedelta, member: discord.Member, reason: string):
+    def __init__(self, *, timeout=300, user_timeout_length: timedelta, member: discord.Member, reason: string, mod_self: ModerationCog):
         super().__init__(timeout=timeout)
         self.user_timeout_length = user_timeout_length
         self.member = member
         self.reason = reason
+        self.mod_self = mod_self
 
     @discord.ui.button(label="Timeout anyways", style=discord.ButtonStyle.green)
     async def timeout_anyways_button(self, interaction:discord.Interaction, button:discord.ui.Button):
-        button.disabled = True
         try:
-            await interaction.response.edit_message(embed=discord.Embed(description="<@" + str(self.member.id) + "> successfully timed out!", color=0x00aeff), view=self)
             await self.member.timeout(self.user_timeout_length, reason=self.reason)
+            await self.mod_self.interaction_webhook.edit(embed=discord.Embed(description="<@" + str(self.member.id) + "> successfully timed out!", color=0x00aeff), view=None)
         except:
+            await embeds.error_executing_command(interaction, edit=True)
             raise
 
 class DMErrorKickButton(discord.ui.View):
-    def __init__(self, *, timeout=300, member: discord.Member, reason: string):
+    def __init__(self, *, timeout=300, member: discord.Member, reason: string, mod_self: ModerationCog):
         super().__init__(timeout=timeout)
         self.member = member
         self.reason = reason
+        self.mod_self = mod_self
 
     @discord.ui.button(label="Kick anyways", style=discord.ButtonStyle.green)
     async def kick_anyways_button(self, interaction:discord.Interaction, button:discord.ui.Button):
-        button.disabled = True
         try:
-            await interaction.response.edit_message(embed=discord.Embed(description="<@" + str(self.member.id) + "> successfully kicked!", color=0x00aeff), view=self)
             await self.member.kick(reason=self.reason)
+            await self.mod_self.interaction_webhook.edit(embed=discord.Embed(description="<@" + str(self.member.id) + "> successfully kicked!", color=0x00aeff), view=None)
         except:
+            await embeds.error_executing_command(interaction, edit=True)
             raise
 
 class DMErrorBanButton(discord.ui.View):
-    def __init__(self, *, timeout=300, member: discord.Member, reason: string, delete_message_days: int):
+    def __init__(self, *, timeout=300, member: discord.Member, reason: string, delete_message_days: int, mod_self: ModerationCog):
         super().__init__(timeout=timeout)
         self.member = member
         self.reason = reason
         self.delete_message_days = delete_message_days
+        self.mod_self = mod_self
 
     @discord.ui.button(label="Ban anyways", style=discord.ButtonStyle.green)
     async def kick_anyways_button(self, interaction:discord.Interaction, button:discord.ui.Button):
-        button.disabled = True
         try:
-            await interaction.response.edit_message(embed=discord.Embed(description="<@" + str(self.member.id) + "> successfully banned!", color=0x00aeff), view=self)
             await self.member.ban(delete_message_days=self.delete_message_days, reason=self.reason)
+            await self.mod_self.interaction_webhook.edit(embed=discord.Embed(description="<@" + str(self.member.id) + "> successfully banned!", color=0x00aeff), view=None)
         except:
+            await embeds.error_executing_command(interaction, edit=True)
             raise
 
 async def setup(bot):
