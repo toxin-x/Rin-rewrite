@@ -11,6 +11,7 @@ import os
 from typing import Optional
 import math
 import json
+import random
 
 import discord
 from discord import app_commands
@@ -20,11 +21,6 @@ import cogs.tasks.song_presence as songp
 import templates.embeds as embeds
 
 from main import BOT_ID
-
-
-# Opening JSON file
-with open("tracklist.json", encoding="UTF-8") as tracklist_json:
-    tracklist = json.load(tracklist_json)
 
 # pitch stuff: `, options="-af asetrate=44100*0.9"` check https://stackoverflow.com/questions/53374590/ffmpeg-change-tone-frequency-keep-length-pitch-audio
 # add volume/speed/pitch/equalizer/reverb/reverse/bitrate eventually
@@ -50,6 +46,12 @@ def sec_to_hms(seconds: int) -> str:
         m_str = minute
     return f"{h_str}{m_str}:{second:02d}"
 
+def mmss_to_sec(mmss):
+    try:
+        m,s = mmss.split(":")
+        return((int(m) * 60)+ int(s))
+    except:
+        return(f"{mmss} is not a number")
 
 class VcCog(commands.Cog):
     """Cog that handles voice channel interactions
@@ -61,6 +63,7 @@ class VcCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.song_queue = []
+        self.queue_position = -1
         self.current_song_timestamp = 0
         self.inactivity_check = 0
         self.max_inactivity = 300
@@ -79,6 +82,9 @@ class VcCog(commands.Cog):
             "mov",
             "mp4",
         ]  # alphabetical order, audio formats followed by video formats
+        self.loop_setting = 0
+        self.tracklist_channel_id = None
+        self.played_tracks = []
 
     @app_commands.command(
         name="connect",
@@ -198,6 +204,7 @@ class VcCog(commands.Cog):
         interaction: discord.Interaction,
         attachment: Optional[discord.Attachment],
         link: Optional[str],
+        tracklist: Optional[discord.Attachment],
         verbose: Optional[bool],
     ) -> str:
         """Plays a file or link in the voice channel that you are currently in, or adds it to the queue if its not
@@ -253,6 +260,13 @@ class VcCog(commands.Cog):
                 )
                 file_check = 2
 
+            # check if tracklist is json
+            if (
+                tracklist is not None
+                and not tracklist.filename.endswith(".json")
+                ):
+                tracklist = None
+
             # check if file format is supported
             if file_check == 0:
                 for file_format in self.supported_file_formats:
@@ -307,7 +321,7 @@ class VcCog(commands.Cog):
 
                 metadata = dict(metabuild)
 
-                fname = os.path.split(file)
+                dirname, fname = os.path.split(file)
 
                 def ifkey(key):
                     return (
@@ -346,12 +360,13 @@ class VcCog(commands.Cog):
                     "user": interaction.user,
                     "time_sec": time_sec,
                     "time_hms": time_hms,
+                    "tracklist": tracklist
                 }
                 if verbose:
                     desc = vdesc
 
                 # actually play stuff
-                if bot_voice_client is None or bot_voice_client.is_playing() is False:
+                if bot_voice_client is None or (bot_voice_client.is_paused() is False and bot_voice_client.is_playing() is False):
                     if bot_voice_client is None:
                         vc = await voice_channel.connect()
                         self.song_queue.append(qbuild)
@@ -398,7 +413,7 @@ class VcCog(commands.Cog):
                             icon_url=self.song_queue[0].get("user").avatar.url,
                         )
                     )
-                elif bot_voice_client.is_playing() is True:
+                elif bot_voice_client.is_playing() is True or bot_voice_client.is_paused() is True:
                     self.song_queue.append(qbuild)
                     await interaction.followup.send(
                         embed=discord.Embed(
@@ -717,6 +732,107 @@ class VcCog(commands.Cog):
         except:
             await embeds.error_executing_command(interaction)
             raise
+ 
+    @app_commands.command(
+            name="loop", 
+            description="Changes the loop setting"
+            )
+    @app_commands.choices(queue_setting=[
+        app_commands.Choice(name="Disabled", value="disabled"),
+        app_commands.Choice(name="Queue", value="queue"),
+        app_commands.Choice(name="Song", value="song"),
+    ])
+    async def loop(
+        self,
+        interaction: discord.Interaction,
+        queue_setting: app_commands.Choice[str]
+    ):
+        """Changes the loop setting
+
+        Args:
+            interaction (discord.Interaction): Discord interaction. Occurs when user does notifiable action (e.g. slash commands)
+            page (Optional[int]): the page number of the queue
+            queue_setting (app_commands.Choice[str]): which setting it's gonna be set to
+        """
+        try:
+            await interaction.response.defer()
+
+            if (queue_setting.value == 'disabled'):
+                self.loop_setting = 0
+            elif (queue_setting.value == 'queue'):
+                self.loop_setting = 1
+            elif (queue_setting.value == "song"):
+                self.loop_setting = 2
+            
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    description=f"Loop setting changed to `{queue_setting.name}`.", color=0x00AEFF
+                )
+            )
+        except:
+            await embeds.error_executing_command(interaction)
+            raise
+
+    @app_commands.command(
+            name="shuffle", 
+            description="Shuffles the queue"
+            )
+    async def shuffle(
+        self,
+        interaction: discord.Interaction,
+    ):
+        """Shuffles the queue
+
+        Args:
+            interaction (discord.Interaction): Discord interaction. Occurs when user does notifiable action (e.g. slash commands)
+            page (Optional[int]): the page number of the queue
+            verbose (Optional[bool]): flag to toggle verbose logs
+        """
+        try:
+            await interaction.response.defer()
+
+            queue_to_shuffle = self.song_queue[1:]
+            random.shuffle(queue_to_shuffle)
+            self.song_queue[1:] = queue_to_shuffle
+            
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    description=f"Queue shuffled.", color=0x00AEFF
+                )
+            )
+        except:
+            await embeds.error_executing_command(interaction)
+            raise
+    
+    @app_commands.command(
+            name="set_tracklist_channel", 
+            description="Sets the channel in which tracklists will be sent"
+            )
+    @app_commands.describe(channel="The channel in which the tracklists will be sent")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_tracklist_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel
+    ):
+        """Sets the channel in which tracklists will be sent
+
+        Args:
+            interaction (discord.Interaction): Discord interaction. Occurs when user does notifiable action (e.g. slash commands)
+            channel (discord.Channel): The channel in which the tracklists will be sent
+        """
+        try:
+            await interaction.response.defer(ephemeral=True)
+            self.tracklist_channel_id = channel.id
+            await interaction.followup.send(embed=discord.Embed(
+                description=f"Tracklisting channel successfully set to <#{channel.id}>!",
+                color=0x00AEFF
+                ),
+                ephemeral=True
+            )
+        except:
+            await embeds.error_executing_command(interaction)
+            raise
 
     # constantly checks the vc instance
     # not sure if discord.utilis.get does an api request (i assume it does), might be an issue if too many requests are made but its only on 2 servers rn so idc
@@ -744,11 +860,22 @@ class VcCog(commands.Cog):
 
                 self.current_song_timestamp = 0
                 self.inactivity_check += 0.5
+                self.played_tracks = []
 
-                if len(self.song_queue) == 1:
+                if (
+                    len(self.song_queue) == 1 
+                    and self.loop_setting == 0
+                ):
                     del self.song_queue[0]
-                elif len(self.song_queue) > 1:
-                    del self.song_queue[0]
+                elif (
+                    len(self.song_queue) > 1 
+                    or self.loop_setting != 0
+                ):
+                    if self.loop_setting == 1:
+                        self.song_queue.append(self.song_queue[0])
+                    if self.loop_setting != 2:
+                        del self.song_queue[0]
+                            
 
                     # check if bot is in a stage channel instead of a voice channel and if so, let it speak
                     if (
@@ -802,35 +929,31 @@ class VcCog(commands.Cog):
     # tracklist task (wip)
     @tasks.loop(seconds=0.5)
     async def tracklisting(self):
-        if (
-            self.song_queue
-            and self.song_queue[0].get("file")
-            == "https://cdn.discordapp.com/attachments/956642997943017522/1081322948280979538/toxheadjockeys.mp3"
-        ):
-            for i in tracklist:
-                if (
-                    self.current_song_timestamp >= i.get("timestamp")
-                    and i.get("printed") == 0
-                ):
-                    i.update({"printed": 1})
-                    title = i.get("artist") + " - " + i.get("song")
-                    desc = "Album: `" + i.get("album") + "`"
-                    footer_icon = "https://cdn.discordapp.com/avatars/264585115726905346/2ecfd3f4970b5eacf302f8e7ba0afa6b.png?size=1024"
-                    performer = "Toxin_X#3790"
-                    event_text = 787784083140378659
-                    await self.bot.get_channel(event_text).send(
-                        embed=discord.Embed(
-                            title=f"Now Playing: `{title}`",
-                            description=f"{desc} \n",
-                            color=0x9912B9,
-                        ).set_footer(text=f"Set by {performer}", icon_url=footer_icon)
-                    )
-                    await self.bot.change_presence(
-                        activity=discord.Activity(
-                            type=discord.ActivityType.listening,
-                            name=f"{i.get('song')} by {i.get('artist')}",
-                        )
-                    )
+        try:
+            if (
+                self.song_queue
+                and self.song_queue[0].get("tracklist")
+                and self.tracklist_channel_id
+                is not None
+            ):
+                await self.song_queue[0].get("tracklist").save('/tracklist.json')
+                with open('/tracklist.json', 'r') as json_file:
+                    tracklist = json.load(json_file)
+                    for i in tracklist.get("tracks"):
+                        track_timestamp = mmss_to_sec(tracklist.get("tracks").get(i).get("timestamp"))
+                        if (not i in self.played_tracks):
+                            track = tracklist.get("tracks").get(i)
+                            if self.current_song_timestamp > float(track_timestamp):
+                                self.played_tracks.append(i)
+
+                                title = f"Now playing `{track.get('artist')} - {track.get('title')}`"
+                                desc = f"Performed by `{tracklist.get('performer')}` \n {sec_to_hms(self.current_song_timestamp)}/{self.song_queue[0].get('time_hms')}"
+                                color_hold = tracklist.get('color')     
+                                color = int(color_hold[1:], 16)
+                                await self.bot.get_channel(self.tracklist_channel_id).send(embed=discord.Embed(title = title, description=desc, color = color))
+                                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=f"{track.get('artist')} - {track.get('title')}"))
+        except Exception as e:
+            raise
 
 
 async def setup(bot: commands.Bot):
